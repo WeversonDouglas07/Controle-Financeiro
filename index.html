@@ -194,6 +194,12 @@ button.pill{cursor:pointer}
 .notice{position:relative;padding-right:44px!important}
 .notice-x{position:absolute;top:8px;right:8px;width:30px;height:30px;border-radius:999px;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;display:grid;place-items:center;opacity:.75}
 .notice-x:hover{opacity:1;background:rgba(127,127,127,.15)}
+.row-acts{display:flex;align-items:center;gap:6px}
+.calb{width:30px;height:30px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--accent);display:grid;place-items:center;padding:0;flex:none}
+.calb svg{width:16px;height:16px}
+.calb.sent{color:var(--muted);opacity:.7}
+.calall{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;border-radius:12px;padding:10px 12px;color:var(--accent)}
+.cal-ic{display:inline-grid}.cal-ic svg{width:18px;height:18px}
 .toggle{display:flex;align-items:center;gap:10px;font-weight:500}
 .toggle input{width:20px;height:20px;accent-color:var(--accent)}
 .actions{display:flex;gap:8px;justify-content:space-between;margin-top:6px;flex-wrap:wrap}
@@ -309,6 +315,59 @@ async function salvar(kind,id,obj){
 async function patch(kind,item,changes){const{id,...rest}=item;return salvar(kind,id,{...rest,...changes,atualizadoEm:new Date().toISOString()})}
 async function apagar(kind,id){const k=ARR[kind],prev=S[k];S[k]=prev.filter(x=>x.id!==id);if(!persist()){S[k]=prev;return false}render();return true}
 
+/* ---------- Lembretes no calendário (.ics) ---------- */
+const CAL_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M12 13v5M9.5 15.5h5"/></svg>';
+function calIcon(){const i=h("span",{class:"cal-ic"});i.innerHTML=CAL_SVG;return i}
+function calBtn(kind,item){const b=h("button",{class:"calb"+(foiEnviado(kind,item)?" sent":""),"aria-label":"Adicionar ao calendário",title:"Adicionar ao calendário",onclick:e=>{e.stopPropagation();enviarCalendario([{kind,item}],false)}});b.innerHTML=CAL_SVG;return b}
+const norm=t=>String(t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+function chaveCal(kind,it){return kind==="lanc"&&it.fixa?"fixa-"+norm(it.descricao):kind+"-"+it.id}
+function foiEnviado(kind,it){return !!(S.meta.calEnviados&&S.meta.calEnviados[chaveCal(kind,it)])}
+function proximaData(iso){ // próxima ocorrência mensal a partir de hoje
+  const d=+iso.slice(8,10);let k=S.today.slice(0,7);
+  for(let i=0;i<14;i++){const[y,m]=k.split("-").map(Number);const last=new Date(y,m,0).getDate();const c=k+"-"+pad(Math.min(d,last));if(c>=S.today)return c;k=shiftMonth(k,1)}
+  return iso;
+}
+function pendentesCalendario(incluirEnviados){
+  const out=[],vistos=new Set();
+  S.lan.filter(l=>l.tipo!=="entrada"&&!l.pago&&l.data).sort((a,b)=>b.data.localeCompare(a.data)).forEach(l=>{
+    const k=chaveCal("lanc",l);if(vistos.has(k))return;
+    if(!l.fixa&&l.data<S.today)return;
+    vistos.add(k);if(incluirEnviados||!foiEnviado("lanc",l))out.push({kind:"lanc",item:l});
+  });
+  S.prov.filter(p=>!p.quitado&&p.data&&(p.data>=S.today||(+p.parcelas>1))).forEach(p=>{if(incluirEnviados||!foiEnviado("prov",p))out.push({kind:"prov",item:p})});
+  return out;
+}
+function icsEsc(t){return String(t||"").replace(/\\/g,"\\\\").replace(/;/g,"\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n")}
+function icsFold(line){const out=[];let s=line;while(s.length>70){out.push(s.slice(0,70));s=" "+s.slice(70)}out.push(s);return out.join("\r\n")}
+function eventoIcs(kind,it){
+  const rec=kind==="prov"&&it.tipo==="receber";
+  let ini=it.data,rrule=null;
+  if(kind==="lanc"&&it.fixa){ini=proximaData(it.data);const dia=+ini.slice(8,10);
+    const by=dia>=29?"BYMONTHDAY="+Array.from({length:dia-27},(_,i)=>28+i).join(",")+";BYSETPOS=-1":"BYMONTHDAY="+dia;
+    rrule="RRULE:FREQ=MONTHLY;"+by+(it.repeteMeses>0?";COUNT="+it.repeteMeses:"")}
+  else if(kind==="prov"&&+it.parcelas>1){rrule="RRULE:FREQ=MONTHLY;COUNT="+(+it.parcelas)}
+  const d0=ini.replace(/-/g,""),d1=isoOf(new Date(fromISO(ini).getTime()+864e5)).replace(/-/g,"");
+  const titulo=(rec?"Receber: ":"Pagar: ")+(it.descricao||"")+" · "+money(it.valor);
+  const desc=[it.para?(rec?"De: ":"Para: ")+it.para:"",it.nota?"Obs.: "+it.nota:"",kind==="lanc"&&it.fixa?"Dívida fixa (todo mês)":"",+it.parcelas>1?it.parcelas+" parcelas":"","Lembrete do app Controle mensal"].filter(Boolean).join("\n");
+  const stamp=new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
+  return ["BEGIN:VEVENT","UID:"+chaveCal(kind,it)+"@controle-mensal","DTSTAMP:"+stamp,"DTSTART;VALUE=DATE:"+d0,"DTEND;VALUE=DATE:"+d1,
+    rrule,"SUMMARY:"+icsEsc(titulo),"DESCRIPTION:"+icsEsc(desc),"TRANSP:TRANSPARENT",
+    "BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+icsEsc(titulo),"TRIGGER:-PT15H","END:VALARM","END:VEVENT"].filter(Boolean).map(icsFold);
+}
+function montarIcs(lista){return ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Controle mensal//PT-BR","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:Controle mensal",...lista.flatMap(x=>eventoIcs(x.kind,x.item)),"END:VCALENDAR"].join("\r\n")+"\r\n"}
+async function enviarCalendario(lista,lote){
+  if(!lista.length){toast("Nenhum lembrete pendente para enviar");return}
+  const ics=montarIcs(lista);const nome=(lista.length===1?norm(lista[0].item.descricao)||"lembrete":"lembretes-controle-mensal")+".ics";
+  const ios=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+  if(ios){location.href="data:text/calendar;charset=utf-8,"+encodeURIComponent(ics)}
+  else{const url=URL.createObjectURL(new Blob([ics],{type:"text/calendar;charset=utf-8"}));const a=h("a",{href:url,download:nome});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000)}
+  S.meta.calEnviados=S.meta.calEnviados||{};const agora=new Date().toISOString();
+  lista.forEach(x=>S.meta.calEnviados[chaveCal(x.kind,x.item)]=agora);persist();
+  toast(lista.length===1?"Toque em \"Adicionar\" no calendário":"Toque em \"Adicionar todos\" no calendário");
+  if(!$("#scrim").hidden&&lote)closeSheet();render();
+}
+window.__ics=montarIcs;window.__pend=pendentesCalendario;
+
 /* ---------- Backup em Excel ---------- */
 const xDate=s=>{if(!s)return"";const[y,m,d]=s.split("-").map(Number);return new Date(Date.UTC(y,m-1,d,12))};
 function montarPlanilha(){
@@ -371,6 +430,11 @@ function abrirBackup(){
     h("div",{class:"opt"},h("div",{},h("b",{},"Aparência"),h("p",{},"Modo diurno ou noturno. No automático, segue o ajuste do iPhone."),
       seg("tema",[["auto","Automático"],["claro","Diurno"],["escuro","Noturno"]],PREF.tema||"auto",k=>{PREF.tema=k;salvarPrefs()}),
       h("span",{class:"flabel"},"Cor"),h("div",{style:"height:8px"}),sws)),
+    h("div",{class:"opt"},h("div",{},h("b",{},"Lembretes no calendário"),
+      h("p",{},"Manda as contas e provisões pendentes para o Calendário do iPhone, com aviso 1 dia antes às 9h. Dívidas fixas e provisões parceladas viram lembrete mensal. Itens já enviados não são repetidos."),
+      h("div",{style:"display:flex;gap:8px;flex-wrap:wrap"},
+        h("button",{class:"btn primary",onclick:()=>enviarCalendario(pendentesCalendario(),true)},"Enviar pendentes ("+pendentesCalendario().length+")"),
+        h("button",{class:"btn",onclick:()=>enviarCalendario(pendentesCalendario(true),true)},"Reenviar todos")))),
     h("div",{class:"opt"},h("div",{},h("b",{},"Salvar backup em Excel"),
       h("p",{},"Gera um .xlsx com as abas Registro, Controle Mensal e Provisões. No iPhone, escolha \"Salvar em Arquivos\" (iCloud) ou mande para você mesmo. Último backup: "+ult+"."),
       h("button",{class:"btn primary",onclick:exportar},"Gerar backup"))),
@@ -486,8 +550,8 @@ function renderMes(){
       const pill=h("button",{class:"pill "+cls,title:"Tocar para marcar como "+(l.pago?"pendente":(tipo==="entrada"?"recebido":"pago")),onclick:async e=>{e.stopPropagation();await patch("lanc",l,{pago:!l.pago})}},st);
       list.append(clickable(h("div",{class:"row"},
         h("div",{class:"row-main"},h("div",{class:"row-t"},l.descricao||"—"),
-          h("div",{class:"row-m"},h("span",{class:"num"},(tipo==="entrada"?"Crédito ":"Vence ")+dBR(l.data)),l.nota?h("span",{class:"chip"},l.nota):null)),
-        h("div",{class:"row-v"},h("strong",{class:"num"},money(l.valor)),pill)),()=>openSheet("lanc",l)));
+          h("div",{class:"row-m"},h("span",{class:"num"},(tipo==="entrada"?"Crédito ":"Vence ")+dBR(l.data)),l.nota?h("span",{class:"chip"},l.nota):null,l.fixa&&tipo!=="entrada"?h("span",{class:"chip"},"Fixa"):null)),
+        h("div",{class:"row-v"},h("strong",{class:"num"},money(l.valor)),tipo==="entrada"||l.pago||(!l.fixa&&l.data&&l.data<S.today)?pill:h("div",{class:"row-acts"},calBtn("lanc",l),pill))),()=>openSheet("lanc",l)));
     });
     if(extra)list.append(extra);
     if(!arr.length&&!extra)list.append(h("div",{class:"row"},h("span",{class:"sub"},"Nenhuma linha ainda.")));
@@ -518,6 +582,8 @@ function renderProv(){
   const seg=h("div",{class:"seg",role:"group","aria-label":"Filtro"},[["pend","Pendentes"],["quit","Quitadas"],["all","Todas"]].map(([k,l])=>
     h("button",{"aria-pressed":String(S.provFiltro===k),onclick:()=>{S.provFiltro=k;renderProv()}},l)));
   root.append(seg);
+  const nPend=pendentesCalendario().length;
+  if(nPend)root.append(h("button",{class:"btn calall",onclick:()=>enviarCalendario(pendentesCalendario(),true)},calIcon(),"Enviar "+nPend+(nPend===1?" lembrete":" lembretes")+" ao calendário"));
   let arr=S.prov.slice();
   if(S.provFiltro==="pend")arr=arr.filter(p=>!p.quitado);else if(S.provFiltro==="quit")arr=arr.filter(p=>p.quitado);
   arr.sort((a,b)=>(a.data||"9").localeCompare(b.data||"9"));
@@ -539,7 +605,7 @@ function renderProv(){
         const para=p.para?h("span",{},p.para," ",h("button",{class:"copy",onclick:e=>{e.stopPropagation();copiar(p.para)}},"Copiar")):null;
         l.append(clickable(h("div",{class:"row"+(p.quitado?" done":"")},chk,
           h("div",{class:"row-main"},h("div",{class:"row-t"},p.descricao||"—"),h("div",{class:"row-m"},para,p.parcelas>1?h("span",{class:"chip"},p.parcelas+" parcelas"):null)),
-          h("div",{class:"row-v"},h("strong",{class:"num "+(rec?"pos":"neg")},(rec?"+ ":"− ")+money(p.valor)),h("span",{class:"pill "+(rec?"p-ok":"p-bad")},rec?"A receber":"A pagar"))),()=>openSheet("prov",p)));
+          h("div",{class:"row-v"},h("strong",{class:"num "+(rec?"pos":"neg")},(rec?"+ ":"− ")+money(p.valor)),h("div",{class:"row-acts"},p.quitado||(p.data&&p.data<S.today&&!(+p.parcelas>1))?null:calBtn("prov",p),h("span",{class:"pill "+(rec?"p-ok":"p-bad")},rec?"A receber":"A pagar")))),()=>openSheet("prov",p)));
       });
       card.append(l);
     }
@@ -591,12 +657,16 @@ function openSheet(kind,item,preset){
     titulo=novo?"Novo lançamento · "+mesLabel(it.mes||S.mes):"Editar lançamento";
     const lblData=h("label",{for:"f-data"},tipo==="entrada"?"Data do crédito":"Vencimento");
     const lblPago=h("span",{},tipo==="entrada"?"Já recebi":"Já paguei");
-    form.append(seg("tipo",[["entrada","Entrada"],["despesa","Despesa"]],tipo,k=>{lblData.textContent=k==="entrada"?"Data do crédito":"Vencimento";lblPago.textContent=k==="entrada"?"Já recebi":"Já paguei"}),
+    const mesesIn=h("div",{class:"field"},h("label",{for:"f-meses"},"Lembrete no calendário por quantos meses? (0 = sem fim)"),inp("f-meses","repeteMeses",{type:"number",inputmode:"numeric",min:"0",max:"120",value:it.repeteMeses!=null?it.repeteMeses:12}));
+    mesesIn.hidden=!it.fixa;
+    const fixaBox=h("div",{class:"form",style:"gap:10px"},h("label",{class:"toggle"},h("input",{type:"checkbox",name:"fixa",checked:!!it.fixa,onchange:e=>mesesIn.hidden=!e.target.checked}),"Dívida fixa: repete todo mês"),mesesIn);
+    fixaBox.hidden=tipo==="entrada";
+    form.append(seg("tipo",[["entrada","Entrada"],["despesa","Despesa"]],tipo,k=>{fixaBox.hidden=k==="entrada";lblData.textContent=k==="entrada"?"Data do crédito":"Vencimento";lblPago.textContent=k==="entrada"?"Já recebi":"Já paguei"}),
       field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"numeric",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
       field("f-desc","Descrição",inp("f-desc","descricao",{placeholder:"Ex.: Salário, Energia elétrica",value:it.descricao||"",autocomplete:"off"})),
       h("div",{class:"two"},h("div",{class:"field"},lblData,inp("f-data","data",{type:"date",value:it.data||""})),
         field("f-nota","Observação",inp("f-nota","nota",{placeholder:"Ex.: Benefício",value:it.nota||""}))),
-      h("label",{class:"toggle"},h("input",{type:"checkbox",name:"pago",checked:!!it.pago}),lblPago));
+      h("label",{class:"toggle"},h("input",{type:"checkbox",name:"pago",checked:!!it.pago}),lblPago),fixaBox);
   }else{
     titulo=novo?"Nova provisão":"Editar provisão";
     form.append(seg("tipo",[["pagar","A pagar"],["receber","A receber"]],it.tipo||"pagar"),
@@ -604,7 +674,7 @@ function openSheet(kind,item,preset){
       field("f-desc","Descrição",inp("f-desc","descricao",{placeholder:"Ex.: Conta de água, Empréstimo",value:it.descricao||"",autocomplete:"off"})),
       field("f-para","Para / de quem (chave Pix, conta…)",inp("f-para","para",{placeholder:"Ex.: 11999999999 (PIX)",value:it.para||""})),
       h("div",{class:"two"},field("f-data","Data do pagamento",inp("f-data","data",{type:"date",value:it.data||""})),
-        field("f-parc","Parcelas",inp("f-parc","parcelas",{type:"number",inputmode:"numeric",min:"0",max:"48",value:it.parcelas||0}))),
+        field("f-parc","Parcelas (lembrete mensal)",inp("f-parc","parcelas",{type:"number",inputmode:"numeric",min:"0",max:"48",value:it.parcelas||0}))),
       h("label",{class:"toggle"},h("input",{type:"checkbox",name:"quitado",checked:!!it.quitado}),"Já quitada"));
   }
   const del=novo?null:h("button",{type:"button",class:"btn danger",onclick:async e=>{
@@ -618,7 +688,8 @@ function openSheet(kind,item,preset){
     if(!desc){err.textContent="Escreva uma descrição.";$("#f-desc").focus();return}
     const now=new Date().toISOString();let obj;
     if(kind==="registro"){const forma=fd.get("forma");obj={tipo:fd.get("tipo"),valor,descricao:desc,data:fd.get("data")||S.today,forma,parcelas:forma==="Cartão de crédito"?Math.max(1,parseInt(fd.get("parcelas"))||1):1}}
-    else if(kind==="lanc"){obj={mes:it.mes||S.mes,tipo:fd.get("tipo"),valor,descricao:desc,data:fd.get("data")||"",nota:String(fd.get("nota")||"").trim(),pago:fd.get("pago")==="on"}}
+    else if(kind==="lanc"){obj={mes:it.mes||S.mes,tipo:fd.get("tipo"),valor,descricao:desc,data:fd.get("data")||"",nota:String(fd.get("nota")||"").trim(),pago:fd.get("pago")==="on"};
+      if(obj.tipo!=="entrada"&&fd.get("fixa")==="on"){obj.fixa=true;obj.repeteMeses=Math.max(0,Math.min(120,parseInt(fd.get("repeteMeses"))||0))}}
     else{obj={tipo:fd.get("tipo"),valor,descricao:desc,para:String(fd.get("para")||"").trim(),data:fd.get("data")||"",parcelas:Math.max(0,parseInt(fd.get("parcelas"))||0),quitado:fd.get("quitado")==="on"}}
     obj.criadoEm=it.criadoEm||now;obj.atualizadoEm=now;
     const btn=form.querySelector("[type=submit]");btn.disabled=true;btn.textContent="Salvando…";
