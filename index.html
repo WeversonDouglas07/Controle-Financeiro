@@ -94,6 +94,14 @@ section{display:flex;flex-direction:column;gap:14px}
 .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
 .stat-l{display:block;color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
+.stat-big{display:flex;flex-direction:column;gap:2px}
+.stat-s{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.stat-s.neg{color:var(--neg);font-weight:600}
+.stat-v2{font-family:var(--f-display);font-size:15px}
+.stat-sep{height:1px;background:var(--line);margin:8px 0 6px}
+.stat-parts{display:flex;flex-direction:column;gap:2px;margin-top:8px;font-size:12px;color:var(--muted)}
+.stat-parts span{display:flex;justify-content:space-between;gap:6px}
+.stat-parts b{color:var(--ink);font-weight:600}
 .stat-v{display:block;font-family:var(--f-display);font-size:17px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .neg{color:var(--neg)} .pos{color:var(--pos)}
 
@@ -380,8 +388,35 @@ function renderRegistro(){
   const itens=S.reg.filter(r=>(r.data||"").slice(0,7)===S.mes).sort((a,b)=>(b.data||"").localeCompare(a.data||"")||(b.criadoEm||"").localeCompare(a.criadoEm||""));
   const gastos=itens.filter(r=>r.tipo!=="ganho"),ganhos=itens.filter(r=>r.tipo==="ganho");
   const isMesAtual=S.mes===monthOf(new Date());
-  root.append(h("div",{class:"stats",id:"reg-stats"},
-    stat("Gastos no mês",sum(gastos),"neg"),stat("Ganhos no mês",sum(ganhos),"pos"),
+  // Gastos do mês = contas da aba Mês + compras do Registro + provisões a pagar com data neste mês
+  const contasMes=S.lan.filter(l=>l.mes===S.mes&&l.tipo!=="entrada");
+  const provMes=S.prov.filter(p=>p.tipo!=="receber"&&(p.data||"").slice(0,7)===S.mes);
+  const totContas=sum(contasMes),totCompras=sum(gastos),totProv=sum(provMes);
+  const totGastos=Math.round((totContas+totCompras+totProv)*100)/100;
+  const cGastos=h("div",{class:"stat stat-big",id:"reg-gastos"},h("span",{class:"stat-l"},"Gastos no mês"),
+    h("strong",{class:"stat-v num neg"},money(totGastos)),
+    h("div",{class:"stat-parts num"},
+      h("span",{},"Contas ",h("b",{},money(totContas))),
+      h("span",{},"Compras ",h("b",{},money(totCompras))),
+      h("span",{},"Provisões ",h("b",{},money(totProv)))));
+  // Próxima entrada e próximo débito, a partir de hoje
+  const hoje=S.today;
+  const pend=(arr)=>arr.filter(x=>x.data&&x.data>=hoje).sort((a,b)=>a.data.localeCompare(b.data))[0]||null;
+  const proxEnt=pend(S.lan.filter(l=>l.tipo==="entrada"&&!l.pago));
+  const debitos=[...S.lan.filter(l=>l.tipo!=="entrada"&&!l.pago),...S.prov.filter(p=>p.tipo!=="receber"&&!p.quitado)];
+  const proxDeb=pend(debitos);
+  const vencidos=debitos.filter(x=>x.data&&x.data<hoje);
+  const quando=d=>{const n=daysTo(d);return dShort(d)+" · "+(n===0?"hoje":n===1?"amanhã":"em "+n+" dias")};
+  const cProx=h("div",{class:"stat stat-big",id:"reg-proximos"},
+    h("span",{class:"stat-l"},"Próxima entrada"),
+    h("strong",{class:"stat-v num pos"},proxEnt?money(proxEnt.valor):"—"),
+    h("span",{class:"stat-s"},proxEnt?(proxEnt.descricao||"Entrada")+" · "+quando(proxEnt.data):"Nenhuma entrada lançada a partir de hoje"),
+    h("div",{class:"stat-sep"}),
+    h("span",{class:"stat-l"},"Próximo débito"),
+    h("strong",{class:"stat-v2 num neg"},proxDeb?"− "+money(proxDeb.valor):"—"),
+    h("span",{class:"stat-s"},proxDeb?(proxDeb.descricao||"Débito")+" · "+quando(proxDeb.data):"Nenhum débito a partir de hoje"),
+    vencidos.length?h("span",{class:"stat-s neg"},vencidos.length+(vencidos.length===1?" vencido":" vencidos")+" · "+money(sum(vencidos))):null);
+  root.append(h("div",{class:"stats",id:"reg-stats"},cGastos,cProx,
     isMesAtual?stat("Gasto hoje",sum(gastos.filter(r=>r.data===S.today))):stat("Saldo do registro",sum(ganhos)-sum(gastos))));
 
   if(gastos.length){
