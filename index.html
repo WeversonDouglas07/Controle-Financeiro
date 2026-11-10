@@ -179,6 +179,13 @@ button.pill{cursor:pointer}
 .field input:focus,.field select:focus,.field textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
 .field.money input{font-family:var(--f-display);font-size:26px;padding:8px 12px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chipb{border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:999px;padding:9px 14px;font-weight:600;font-size:14px;line-height:1}
+.chipb:hover{border-color:var(--muted)}
+.chipb[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.notice{position:relative;padding-right:44px!important}
+.notice-x{position:absolute;top:8px;right:8px;width:30px;height:30px;border-radius:999px;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;display:grid;place-items:center;opacity:.75}
+.notice-x:hover{opacity:1;background:rgba(127,127,127,.15)}
 .toggle{display:flex;align-items:center;gap:10px;font-weight:500}
 .toggle input{width:20px;height:20px;accent-color:var(--accent)}
 .actions{display:flex;gap:8px;justify-content:space-between;margin-top:6px;flex-wrap:wrap}
@@ -510,6 +517,14 @@ async function copiar(txt){
 }
 
 /* ---------- Folha de edição ---------- */
+// Digita como em app de banco: 1 → 0,01 · 12 → 0,12 · 12000 → 120,00
+function mascaraMoeda(el){
+  const fmt=()=>{let d=el.value.replace(/\D/g,"").replace(/^0+/,"").slice(0,11);
+    el.value=d?(parseInt(d,10)/100).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}):"";
+    try{el.setSelectionRange(el.value.length,el.value.length)}catch(e){}};
+  el.addEventListener("input",fmt);
+  el.addEventListener("focus",()=>setTimeout(()=>{try{el.setSelectionRange(el.value.length,el.value.length)}catch(e){}},0));
+}
 function seg(name,opts,val,onchange){
   const wrap=h("div",{class:"seg",role:"group"});const input=h("input",{type:"hidden",name,value:val});
   opts.forEach(([k,l])=>wrap.append(h("button",{type:"button","aria-pressed":String(k===val),onclick:e=>{input.value=k;wrap.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",String(b===e.currentTarget)));onchange&&onchange(k)}},l)));
@@ -523,23 +538,26 @@ function openSheet(kind,item,preset){
   const form=h("form",{class:"form",novalidate:true});
   const err=h("div",{class:"err",role:"alert"});
   let titulo="";
-  const valorStr=it.valor!=null?String(it.valor).replace(".",","):"";
+  const valorStr=it.valor!=null&&+it.valor>0?(+it.valor).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}):"";
   if(kind==="registro"){
     titulo=novo?"Registrar":"Editar registro";
     const parc=field("f-parc","Parcelas",inp("f-parc","parcelas",{type:"number",inputmode:"numeric",min:"1",max:"48",value:it.parcelas||1}));
-    const sel=h("select",{id:"f-forma",name:"forma",onchange:e=>parc.hidden=e.target.value!=="Cartão de crédito"},FORMAS.map(f=>h("option",{value:f,selected:(it.forma||"Pix")===f},f)));
+    const formaIn=h("input",{type:"hidden",name:"forma",value:it.forma||"Pix"});
+    const chips=h("div",{class:"chips",role:"group","aria-labelledby":"lbl-forma"},FORMAS.map(f=>h("button",{type:"button",class:"chipb","aria-pressed":String((it.forma||"Pix")===f),onclick:e=>{
+      formaIn.value=f;chips.querySelectorAll(".chipb").forEach(b=>b.setAttribute("aria-pressed",String(b===e.currentTarget)));parc.hidden=f!=="Cartão de crédito"}},f)),formaIn);
     parc.hidden=(it.forma||"Pix")!=="Cartão de crédito";
     form.append(seg("tipo",[["gasto","Gasto"],["ganho","Ganho"]],it.tipo||"gasto"),
-      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"decimal",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
+      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"numeric",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
       field("f-desc","Descrição",inp("f-desc","descricao",{placeholder:"Ex.: Mercado, padaria, Uber",value:it.descricao||"",autocomplete:"off"})),
-      h("div",{class:"two"},field("f-data","Data",inp("f-data","data",{type:"date",value:it.data||S.today})),field("f-forma","Forma de pagamento",sel)),parc);
+      field("f-data","Data",inp("f-data","data",{type:"date",value:it.data||S.today})),
+      h("div",{class:"field"},h("span",{class:"flabel",id:"lbl-forma"},"Forma de pagamento"),chips),parc);
   }else if(kind==="lanc"){
     const tipo=it.tipo||(preset&&preset.tipo)||"despesa";
     titulo=novo?"Novo lançamento · "+mesLabel(it.mes||S.mes):"Editar lançamento";
     const lblData=h("label",{for:"f-data"},tipo==="entrada"?"Data do crédito":"Vencimento");
     const lblPago=h("span",{},tipo==="entrada"?"Já recebi":"Já paguei");
     form.append(seg("tipo",[["entrada","Entrada"],["despesa","Despesa"]],tipo,k=>{lblData.textContent=k==="entrada"?"Data do crédito":"Vencimento";lblPago.textContent=k==="entrada"?"Já recebi":"Já paguei"}),
-      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"decimal",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
+      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"numeric",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
       field("f-desc","Descrição",inp("f-desc","descricao",{placeholder:"Ex.: Salário, Energia elétrica",value:it.descricao||"",autocomplete:"off"})),
       h("div",{class:"two"},h("div",{class:"field"},lblData,inp("f-data","data",{type:"date",value:it.data||""})),
         field("f-nota","Observação",inp("f-nota","nota",{placeholder:"Ex.: Benefício",value:it.nota||""}))),
@@ -547,7 +565,7 @@ function openSheet(kind,item,preset){
   }else{
     titulo=novo?"Nova provisão":"Editar provisão";
     form.append(seg("tipo",[["pagar","A pagar"],["receber","A receber"]],it.tipo||"pagar"),
-      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"decimal",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
+      field("f-valor","Valor (R$)",inp("f-valor","valor",{inputmode:"numeric",placeholder:"0,00",value:valorStr,autocomplete:"off"}),"money"),
       field("f-desc","Descrição",inp("f-desc","descricao",{placeholder:"Ex.: Conta de água, Empréstimo",value:it.descricao||"",autocomplete:"off"})),
       field("f-para","Para / de quem (chave Pix, conta…)",inp("f-para","para",{placeholder:"Ex.: 11999999999 (PIX)",value:it.para||""})),
       h("div",{class:"two"},field("f-data","Data do pagamento",inp("f-data","data",{type:"date",value:it.data||""})),
@@ -558,6 +576,7 @@ function openSheet(kind,item,preset){
     const b=e.currentTarget;if(!b.classList.contains("armed")){b.classList.add("armed");b.textContent="Confirmar exclusão";return}
     if(await apagar(kind,it.id)){closeSheet();toast("Excluído")}}},"Excluir");
   form.append(err,h("div",{class:"actions"},del,h("div",{class:"right"},h("button",{type:"button",class:"btn",onclick:closeSheet},"Cancelar"),h("button",{type:"submit",class:"btn primary"},"Salvar"))));
+  form.querySelectorAll('input[name="valor"]').forEach(mascaraMoeda);
   form.addEventListener("submit",async e=>{
     e.preventDefault();const fd=new FormData(form);const valor=parseValor(fd.get("valor"));const desc=String(fd.get("descricao")||"").trim();
     if(!(valor>0)){err.textContent="Informe um valor maior que zero.";$("#f-valor").focus();return}
@@ -606,8 +625,9 @@ function renderAviso(){
   const dias=S.meta.ultimoBackup?Math.floor((Date.now()-new Date(S.meta.ultimoBackup))/864e5):null;
   const atrasado=tot>0&&(dias===null||dias>=7);
   g.classList.toggle("alert",atrasado);
-  if(!tot){n.append(h("b",{},"Primeira vez aqui?"),h("span",{},"Se você recebeu um arquivo de backup, restaure-o para trazer seus lançamentos. Ou comece a registrar direto."),h("button",{class:"btn sm",onclick:abrirBackup},"Restaurar backup"));n.hidden=false}
-  else if(atrasado){n.append(h("span",{},dias===null?"Você ainda não fez nenhum backup. Os dados ficam só neste celular.":"Seu último backup foi há "+dias+" dias."),h("button",{class:"btn sm",onclick:exportar},"Fazer backup agora"));n.hidden=false}
+  const x=fn=>h("button",{class:"notice-x","aria-label":"Fechar aviso",onclick:()=>{fn();salvarPrefs();render()}},"×");
+  if(!tot&&!PREF.ocultarInicio){n.append(x(()=>PREF.ocultarInicio=true),h("b",{},"Primeira vez aqui?"),h("span",{},"Se você recebeu um arquivo de backup, restaure-o para trazer seus lançamentos. Ou comece a registrar direto."),h("button",{class:"btn sm",onclick:abrirBackup},"Restaurar backup"));n.hidden=false}
+  else if(atrasado&&!(PREF.lembreteAte>Date.now())){n.append(x(()=>PREF.lembreteAte=Date.now()+7*864e5),h("span",{},dias===null?"Você ainda não fez nenhum backup. Os dados ficam só neste celular.":"Seu último backup foi há "+dias+" dias."),h("button",{class:"btn sm",onclick:exportar},"Fazer backup agora"));n.hidden=false}
   else n.hidden=true;
 }
 $("#gear").onclick=abrirBackup;
